@@ -1,0 +1,30 @@
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: mysql-cronjob
+  namespace: data
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: mysql-cronjob 
+            image: mysql:5.7
+            imagePullPolicy: IfNotPresent
+            command:
+            - bash
+            - "-c"
+            - |
+              set -ex
+              cp /mnt/config-map/check_mm.sh /
+              /bin/bash /check_mm.sh
+            volumeMounts:
+            - name: config-map
+              mountPath: /mnt/config-map
+          volumes:
+          - name: config-map
+            configMap:
+              name: mysql
+          restartPolicy: OnFailure

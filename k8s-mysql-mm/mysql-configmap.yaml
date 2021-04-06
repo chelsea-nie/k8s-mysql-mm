@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql
+  namespace: data
+  labels:
+    app: mysql
+data:
+  master.cnf: |
+    # Apply this config only on the master.
+    [mysqld]
+    log-bin
+    log_bin_trust_function_creators=1
+    lower_case_table_names=1
+  slave.cnf: |
+    # Apply this config only on slaves.
+    [mysqld]
+    super-read-only
+    log_bin_trust_function_creators=1
+  syc_mm.sh: |
+    M_LOG_FILE=$(mysql -h mysql-1.mysql -e "show master status"  | grep -E "^mysql-1-bin" | awk '{print $1}')
+    M_LOG_POS=$(mysql -h mysql-1.mysql -e "show master status"  | grep -E "^mysql-1-bin" | awk '{print $2}')
+    mysql -hmysql-0.mysql -e "STOP SLAVE;
+    RESET SLAVE;
+    CHANGE MASTER TO MASTER_HOST='mysql-1.mysql',MASTER_USER='root',MASTER_PASSWORD='',MASTER_LOG_FILE='${M_LOG_FILE}',MASTER_LOG_POS=${M_LOG_POS},MASTER_CONNECT_RETRY=10;
+    START SLAVE;"
+  check_mm.sh: |
+    for i in `seq 0 1`
+    do
+        if [ $i == 0 ];then
+            j=1
+        else
+            j=0
+        fi
+        rep=($(mysql -h mysql-$i.mysql -e "show slave status\G;"|egrep "_Running|Behind_Master|IO_Errno|SQL_Errno"|awk '{print $NF}'))
+        if [  "${rep[0]}"  ==  "Yes"  -a  "${rep[1]}"  ==  "Yes"  -a  "${rep[2]}"  ==  "0"  ]
+             then
+                echo "mysql-$i.mysql 双线程为: YES!"
+        else
+                if [ "${rep[3]}"  !=  0 ] || [ "${rep[#@]}" -eq 0 ]
+                   then
+                      M_LOG_FILE=$(mysql -h mysql-$j.mysql -e "show master status"  | grep -E "^mysql-$j-bin" | awk '{print $1}')
+                      M_LOG_POS=$(mysql -h mysql-$j.mysql -e "show master status"  | grep -E "^mysql-$j-bin" | awk '{print $2}')
+                      mysql -hmysql-$i.mysql -e "STOP SLAVE;
+                      CHANGE MASTER TO MASTER_HOST='mysql-$j.mysql',MASTER_USER='root',MASTER_PASSWORD='',MASTER_LOG_FILE='${M_LOG_FILE}',MASTER_LOG_POS=${M_LOG_POS},MASTER_CONNECT_RETRY=10;
+                      START SLAVE;" 
+                elif [ "${rep[4]}"  !=  0 ] 
+                    then
+                      mysql -h mysql-$i.mysql -e "stop slave;set global sql_slave_skip_counter=1;start slave;"
+                fi
+                char="Sorry mysql-$i.mysql双线程为: error!"
+                echo "$char"
+        fi
+    done
